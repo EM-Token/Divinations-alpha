@@ -1,0 +1,38 @@
+trading-assistant/
+├── src/
+│   ├── __init__.py
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── trading_agent.py
+│   │   └── sentiment_agent.py
+│   ├── analyzers/
+│   │   ├── __init__.py
+│   │   ├── pattern_analyzer.py
+│   │   ├── chart_analyzer.py
+│   │   ├── transaction_analyzer.py
+│   │   └── dev_analyzer.py
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── blockchain_listener.py
+│   │   └── social_listener.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── token.py
+│   │   └── developer.py
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   └── api/
+│       ├── __init__.py
+│       ├── server.py
+│       └── websocket.py
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_trading_agent.py
+│   ├── test_pattern_analyzer.py
+│   └── test_api.py
+├── setup.py
+├── requirements.txt
+├── pytest.ini
+└── README.md 

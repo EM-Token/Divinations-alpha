@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Assistant Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold">Trading Assistant Dashboard</h1>
+            <div class="flex items-center">
+                <div id="connection-status" class="flex items-center">
+                    <span class="h-3 w-3 rounded-full bg-red-500 mr-2"></span>
+                    <span class="text-sm text-gray-600">Disconnected</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Token List -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="tokenList">
+            <!-- Token cards will be inserted here -->
+        </div>
+    </div>
+
+    <!-- Token Details Modal -->
+    <div id="tokenModal" class="fixed inset-0 bg-black bg-opacity-50 hidden">
+        <div class="bg-white rounded-lg p-8 max-w-4xl mx-auto mt-20">
+            <div id="tokenDetails">
+                <!-- Token details will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+            
+            updateConnectionStatus(true);
+            ws.onmessage = function(event) {
+                try {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'token_update') {
+                    updateTokenCard(message.data);
+                } else if (message.type === 'pattern_alert') {
+                    showPatternAlert(message.data);
+                }
+            };
+            
+            ws.onclose = function() {
+                updateConnectionStatus(false);
+                // Reconnect after 1 second
+                setTimeout(connectWebSocket, 1000);
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket Error:', error);
+                updateConnectionStatus(false);
+            };
+        }
+        
+        function updateTokenCard(tokenData) {
+            const tokenCard = document.querySelector(`[data-address="${tokenData.address}"]`);
+            if (tokenCard) {
+                // Update existing card
+                tokenCard.querySelector('.risk-score').textContent = tokenData.risk_score.toFixed(1);
+                tokenCard.querySelector('.trading-signal').textContent = tokenData.trading_signal;
+                // Update other fields...
+            } else {
+                // Add new card
+                loadTokens();  // Refresh the entire list
+            }
+        }
+        
+        function showPatternAlert(patternData) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'fixed bottom-4 right-4 bg-white rounded-lg shadow-lg p-4 animate-slide-in';
+            alertDiv.innerHTML = `
+                <h4 class="font-bold">${patternData.pattern.pattern_type}</h4>
+                <p>${patternData.pattern.description}</p>
+                <p class="text-sm text-gray-600">Confidence: ${(patternData.pattern.confidence * 100).toFixed(1)}%</p>
+            `;
+            
+            document.body.appendChild(alertDiv);
+            setTimeout(() => alertDiv.remove(), 5000);  // Remove after 5 seconds
+        }
+        
+        // Connect WebSocket when page loads
+        connectWebSocket();
+    </script>
+
+    <style>
+        @keyframes slide-in {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        .animate-slide-in {
+            animation: slide-in 0.3s ease-out;
+        }
+    /* Loading animation */
+    .loading {
+        position: relative;
+        min-height: 200px;
+    }
+    
+    .loading::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 40px;
+        height: 40px;
+        margin: -20px 0 0 -20px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+</style>
+
+<script>
+    function updateConnectionStatus(connected) {
+        const statusDiv = document.getElementById('connection-status');
+        const indicator = statusDiv.querySelector('span:first-child');
+        const text = statusDiv.querySelector('span:last-child');
+        
+        if (connected) {
+            indicator.className = 'h-3 w-3 rounded-full bg-green-500 mr-2';
+            text.textContent = 'Connected';
+        } else {
+            indicator.className = 'h-3 w-3 rounded-full bg-red-500 mr-2';
+            text.textContent = 'Disconnected';
+        }
+    }
+</script>
+</body>
+</html> 

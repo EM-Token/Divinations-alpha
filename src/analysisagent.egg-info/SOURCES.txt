@@ -1,0 +1,9 @@
+pyproject.toml
+setup.py
+src/analysisagent.egg-info/PKG-INFO
+src/analysisagent.egg-info/SOURCES.txt
+src/analysisagent.egg-info/dependency_links.txt
+src/analysisagent.egg-info/top_level.txt
+tests/test_api.py
+tests/test_pattern_analyzer.py
+tests/test_trading_agent.py

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Assistant Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold">Trading Assistant Dashboard</h1>
+            <div class="flex items-center">
+                <div id="fetch-timer" class="mr-4 text-sm text-gray-600">
+                    Next fetch in: <span class="font-mono">60s</span>
+                </div>
+                <div id="connection-status" class="flex items-center">
+                    <span class="h-3 w-3 rounded-full bg-red-500 mr-2"></span>
+                    <span class="text-sm text-gray-600">Disconnected</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Token List -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="tokenList">
+            <!-- Token cards will be inserted here -->
+        </div>
+    </div>
+
+    <!-- Token Details Modal -->
+    <div id="tokenModal" class="fixed inset-0 bg-black bg-opacity-50 hidden">
+        <div class="bg-white rounded-lg p-8 max-w-4xl mx-auto mt-20">
+            <div id="tokenDetails">
+                <!-- Token details will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Timer functionality
+        let timeUntilNextFetch = 60;
+        
+        function updateTimer() {
+            const timerElement = document.querySelector('#fetch-timer span');
+            timerElement.textContent = `${timeUntilNextFetch}s`;
+            
+            if (timeUntilNextFetch <= 0) {
+                timeUntilNextFetch = 60;  // Reset timer
+            } else {
+                timeUntilNextFetch--;
+            }
+        }
+        
+        // Update timer every second
+        setInterval(updateTimer, 1000);
+        
+        function updateConnectionStatus(connected) {
+            const statusDiv = document.getElementById('connection-status');
+            const indicator = statusDiv.querySelector('span:first-child');
+            const text = statusDiv.querySelector('span:last-child');
+            
+            if (connected) {
+                indicator.className = 'h-3 w-3 rounded-full bg-green-500 mr-2';
+                text.textContent = 'Connected';
+            } else {
+                indicator.className = 'h-3 w-3 rounded-full bg-red-500 mr-2';
+                text.textContent = 'Disconnected';
+            }
+        }
+    </script>
+
+    <script>
+        let ws;
+        let reconnectAttempts = 0;
+        const maxReconnectDelay = 30000; // Maximum delay of 30 seconds
+        
+        async function loadTokens() {
+            try {
+                const tokenList = document.getElementById('tokenList');
+                tokenList.classList.add('loading');
+                
+                const response = await fetch('/tokens');
+                const tokens = await response.json();
+                
+                tokenList.innerHTML = tokens.map(token => `
+                    <div class="bg-white rounded-lg shadow-md p-6" data-address="${token.address}">
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <h2 class="text-xl font-bold">${token.name}</h2>
+                                <p class="text-gray-600">${token.address}</p>
+                            </div>
+                            <span class="px-2 py-1 rounded ${
+                                token.status === 'APPROVED' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            }">${token.status}</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <p class="text-gray-600">Risk Score</p>
+                                <p class="text-2xl font-bold risk-score">${token.risk_score.toFixed(1)}</p>
+                            </div>
+                            <div>
+                                <p class="text-gray-600">Signal</p>
+                                <p class="text-2xl font-bold trading-signal">${token.trading_signal}</p>
+                            </div>
+                        </div>
+                        <div class="border-t pt-4">
+                            <h3 class="font-bold mb-2">Patterns</h3>
+                            <ul class="space-y-1">
+                                ${token.patterns.map(pattern => `
+                                    <li class="text-sm">${pattern}</li>
+                                `).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                `).join('');
+                
+                // Reset timer when tokens are fetched
+                timeUntilNextFetch = 60;
+            } finally {
+                tokenList.classList.remove('loading');
+            }
+        }
+        
+        // Load tokens when page loads
+        loadTokens();
+        
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+            
+            ws.onopen = function() {
+                console.log("WebSocket connected");
+                updateConnectionStatus(true);
+                reconnectAttempts = 0;  // Reset attempts on successful connection
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'token_update') {
+                        updateTokenCard(message.data);
+                    } else if (message.type === 'pattern_alert') {
+                        showPatternAlert(message.data);
+                    }
+                } catch (error) {
+                    console.error('Error processing message:', error);
+                }
+            };
+            
+            ws.onclose = function() {
+                updateConnectionStatus(false);
+                // Exponential backoff for reconnection
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay);
+                reconnectAttempts++;
+                console.log(`Reconnecting in ${delay}ms...`);
+                setTimeout(connectWebSocket, delay);
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket Error:', error);
+                updateConnectionStatus(false);
+            };
+        }
+        
+        function updateTokenCard(tokenData) {
+            const tokenCard = document.querySelector(`[data-address="${tokenData.address}"]`);
+            if (tokenCard) {
+                // Update existing card
+                tokenCard.querySelector('.risk-score').textContent = tokenData.risk_score.toFixed(1);
+                tokenCard.querySelector('.trading-signal').textContent = tokenData.trading_signal;
+                // Update other fields...
+            } else {
+                // Add new card
+                loadTokens();  // Refresh the entire list
+            }
+        }
+        
+        function showPatternAlert(patternData) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'fixed bottom-4 right-4 bg-white rounded-lg shadow-lg p-4 animate-slide-in';
+            alertDiv.innerHTML = `
+                <h4 class="font-bold">${patternData.pattern.pattern_type}</h4>
+                <p>${patternData.pattern.description}</p>
+                <p class="text-sm text-gray-600">Confidence: ${(patternData.pattern.confidence * 100).toFixed(1)}%</p>
+            `;
+            
+            document.body.appendChild(alertDiv);
+            setTimeout(() => alertDiv.remove(), 5000);  // Remove after 5 seconds
+        }
+        
+        // Connect WebSocket when page loads
+        connectWebSocket();
+        
+        // Refresh tokens periodically
+        setInterval(loadTokens, 30000);  // Refresh every 30 seconds
+    </script>
+
+    <style>
+        @keyframes slide-in {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        .animate-slide-in {
+            animation: slide-in 0.3s ease-out;
+        }
+    /* Loading animation */
+    .loading {
+        position: relative;
+        min-height: 200px;
+    }
+    
+    .loading::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 40px;
+        height: 40px;
+        margin: -20px 0 0 -20px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+</style>
+</body>
+</html> 

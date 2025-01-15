@@ -1,0 +1,21 @@
+{
+    "rpc_url": "YOUR_SOLANA_RPC_ENDPOINT",
+    "api_key": "YOUR_API_KEY",
+    "twitter_api_key": "YOUR_TWITTER_API_KEY",
+    "twitter_api_secret": "YOUR_TWITTER_API_SECRET",
+    "risk_threshold": 70,
+    "min_confidence": 0.6,
+    "monitoring": {
+        "update_interval": 60,
+        "max_tokens": 1000,
+        "min_liquidity": 10000
+    },
+    "analysis": {
+        "sniper_threshold": 120,
+        "bot_tx_per_minute": 10,
+        "insider_window": 120,
+        "sentiment_weight": 0.3,
+        "chart_weight": 0.4,
+        "transaction_weight": 0.3
+    }
+} 
