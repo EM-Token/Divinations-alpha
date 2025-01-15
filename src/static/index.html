@@ -13,7 +13,7 @@
             <h1 class="text-3xl font-bold">Trading Assistant Dashboard</h1>
             <div class="flex items-center">
                 <div id="fetch-timer" class="mr-4 text-sm text-gray-600">
-                    Next fetch in: <span class="font-mono">60s</span>
+                    Next fetch in: <span class="font-mono">5:00</span>
                 </div>
                 <div id="connection-status" class="flex items-center">
                     <span class="h-3 w-3 rounded-full bg-red-500 mr-2"></span>
@@ -37,16 +37,39 @@
         </div>
     </div>
 
+    <!-- Twitter Sentiment Modal -->
+    <div id="twitterModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50">
+        <div class="bg-white rounded-lg p-8 max-w-2xl mx-auto mt-20 relative">
+            <button onclick="closeTwitterModal()" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+            <h2 class="text-2xl font-bold mb-4">Twitter Sentiment</h2>
+            <div id="twitterContent" class="space-y-4 max-h-[60vh] overflow-y-auto">
+                <div class="animate-pulse">
+                    <div class="h-4 bg-gray-200 rounded w-3/4"></div>
+                    <div class="space-y-3 mt-4">
+                        <div class="h-4 bg-gray-200 rounded"></div>
+                        <div class="h-4 bg-gray-200 rounded w-5/6"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Timer functionality
-        let timeUntilNextFetch = 60;
+        let timeUntilNextFetch = 300;
         
         function updateTimer() {
             const timerElement = document.querySelector('#fetch-timer span');
-            timerElement.textContent = `${timeUntilNextFetch}s`;
+            const minutes = Math.floor(timeUntilNextFetch / 60);
+            const seconds = timeUntilNextFetch % 60;
+            timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
             
             if (timeUntilNextFetch <= 0) {
-                timeUntilNextFetch = 60;  // Reset timer
+                timeUntilNextFetch = 300;  // Reset timer to 5 minutes
             } else {
                 timeUntilNextFetch--;
             }
@@ -86,22 +109,82 @@
                 tokenList.innerHTML = tokens.map(token => `
                     <div class="bg-white rounded-lg shadow-md p-6" data-address="${token.address}">
                         <div class="flex justify-between items-start mb-4">
-                            <div>
-                                <h2 class="text-xl font-bold">${token.name}</h2>
-                                <p class="text-gray-600">${token.address}</p>
+                            <div class="flex items-center">
+                                <div class="w-12 h-12 rounded-full overflow-hidden mr-4 bg-gray-100">
+                                    <img 
+                                        src="${token.logoURI}" 
+                                        alt="${token.name} logo"
+                                        class="w-full h-full object-cover"
+                                        onerror="this.src='https://via.placeholder.com/48?text=${token.symbol || '?'}';"
+                                    >
+                                </div>
+                                <div>
+                                    <h2 class="text-xl font-bold">${token.name}</h2>
+                                    <p class="text-gray-500 text-sm">${token.symbol || ''}</p>
+                                    <p class="text-gray-400 text-xs">${token.address}</p>
+                                </div>
                             </div>
-                            <span class="px-2 py-1 rounded ${
-                                token.status === 'APPROVED' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                            }">${token.status}</span>
+                            <div class="flex items-center gap-2">
+                                <button 
+                                    class="twitter-sentiment-btn bg-blue-400 hover:bg-blue-500 text-white px-3 py-1 rounded-full text-sm flex items-center"
+                                    onclick="showTwitterSentiment('${token.symbol}', '${token.name}')"
+                                >
+                                    <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M23.643 4.937c-.835.37-1.732.62-2.675.733.962-.576 1.7-1.49 2.048-2.578-.9.534-1.897.922-2.958 1.13-.85-.904-2.06-1.47-3.4-1.47-2.572 0-4.658 2.086-4.658 4.66 0 .364.042.718.12 1.06-3.873-.195-7.304-2.05-9.602-4.868-.4.69-.63 1.49-.63 2.342 0 1.616.823 3.043 2.072 3.878-.764-.025-1.482-.234-2.11-.583v.06c0 2.257 1.605 4.14 3.737 4.568-.392.106-.803.162-1.227.162-.3 0-.593-.028-.877-.082.593 1.85 2.313 3.198 4.352 3.234-1.595 1.25-3.604 1.995-5.786 1.995-.376 0-.747-.022-1.112-.065 2.062 1.323 4.51 2.093 7.14 2.093 8.57 0 13.255-7.098 13.255-13.254 0-.2-.005-.402-.014-.602.91-.658 1.7-1.477 2.323-2.41z"/>
+                                    </svg>
+                                    Sentiment
+                                </button>
+                                <span class="px-2 py-1 rounded ${
+                                    token.status === 'APPROVED' ? 'bg-green-100 text-green-800' : 
+                                    token.status === 'ANALYZING' ? 'bg-blue-100 text-blue-800' :
+                                    'bg-red-100 text-red-800'
+                                }">${token.status}</span>
+                            </div>
                         </div>
-                        <div class="grid grid-cols-2 gap-4 mb-4">
+                        ${token.status === 'ANALYZING' ? `
+                            <div class="flex items-center justify-center py-4">
+                                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                                <span class="ml-2 text-blue-600">Analyzing...</span>
+                            </div>
+                        ` : `
+                        <div class="grid grid-cols-2 gap-4 mb-6">
                             <div>
-                                <p class="text-gray-600">Risk Score</p>
-                                <p class="text-2xl font-bold risk-score">${token.risk_score.toFixed(1)}</p>
+                                <p class="text-gray-600">24h Volume</p>
+                                <p class="text-2xl font-bold volume">${new Intl.NumberFormat('en-US', {
+                                    style: 'currency',
+                                    currency: 'USD',
+                                    minimumFractionDigits: 0,
+                                    maximumFractionDigits: 0
+                                }).format(token.volume24hrUSD)}</p>
                             </div>
                             <div>
-                                <p class="text-gray-600">Signal</p>
-                                <p class="text-2xl font-bold trading-signal">${token.trading_signal}</p>
+                                <p class="text-gray-600">Price</p>
+                                <p class="text-2xl font-bold price">${new Intl.NumberFormat('en-US', {
+                                    style: 'currency',
+                                    currency: 'USD',
+                                    minimumFractionDigits: 6,
+                                    maximumFractionDigits: 6
+                                }).format(token.price)}</p>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <p class="text-gray-600">Market Cap</p>
+                                <p class="text-xl font-bold market-cap">${new Intl.NumberFormat('en-US', {
+                                    style: 'currency',
+                                    currency: 'USD',
+                                    minimumFractionDigits: 0,
+                                    maximumFractionDigits: 0
+                                }).format(token.price * 1000000000)}</p>
+                            </div>
+                            <div>
+                                <p class="text-gray-600">Liquidity</p>
+                                <p class="text-xl font-bold liquidity">${new Intl.NumberFormat('en-US', {
+                                    style: 'currency',
+                                    currency: 'USD',
+                                    minimumFractionDigits: 0,
+                                    maximumFractionDigits: 0
+                                }).format(token.liquidity)} <span class="text-sm text-gray-500">SOL</span></p>
                             </div>
                         </div>
                         <div class="border-t pt-4">
@@ -112,11 +195,12 @@
                                 `).join('')}
                             </ul>
                         </div>
+                        `}
                     </div>
                 `).join('');
                 
                 // Reset timer when tokens are fetched
-                timeUntilNextFetch = 60;
+                timeUntilNextFetch = 300;
             } finally {
                 tokenList.classList.remove('loading');
             }
@@ -189,11 +273,69 @@
             setTimeout(() => alertDiv.remove(), 5000);  // Remove after 5 seconds
         }
         
+        async function showTwitterSentiment(symbol, name) {
+            const modal = document.getElementById('twitterModal');
+            const content = document.getElementById('twitterContent');
+            modal.classList.remove('hidden');
+            
+            try {
+                const response = await fetch(`/api/twitter-sentiment?symbol=${symbol}&name=${name}`);
+                const data = await response.json();
+                
+                if (data.tweets && data.tweets.length > 0) {
+                    content.innerHTML = `
+                        <div class="mb-4">
+                            <div class="flex items-center justify-between">
+                                <span class="text-lg font-semibold">$${symbol}</span>
+                                <span class="text-sm text-gray-500">Sentiment Score: ${(data.sentiment_score * 100).toFixed(1)}%</span>
+                            </div>
+                        </div>
+                        <div class="space-y-4">
+                            ${data.tweets.map(tweet => `
+                                <div class="border rounded-lg p-4 hover:bg-gray-50">
+                                    <div class="flex items-start space-x-3">
+                                        <div class="flex-1">
+                                            <p class="text-gray-800">${tweet.text}</p>
+                                            <div class="mt-2 flex items-center text-sm text-gray-500">
+                                                <span>${new Date(tweet.created_at).toLocaleString()}</span>
+                                                <span class="mx-2">•</span>
+                                                <span class="text-${tweet.sentiment > 0 ? 'green' : tweet.sentiment < 0 ? 'red' : 'gray'}-600">
+                                                    Sentiment: ${(tweet.sentiment * 100).toFixed(1)}%
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } else {
+                    content.innerHTML = `
+                        <div class="text-center text-gray-500 py-8">
+                            <p>No recent tweets found for $${symbol}</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error fetching Twitter sentiment:', error);
+                content.innerHTML = `
+                    <div class="text-center text-red-500 py-8">
+                        <p>Error fetching Twitter sentiment data</p>
+                    </div>
+                `;
+            }
+        }
+        
+        function closeTwitterModal() {
+            const modal = document.getElementById('twitterModal');
+            modal.classList.add('hidden');
+        }
+        
         // Connect WebSocket when page loads
         connectWebSocket();
         
         // Refresh tokens periodically
-        setInterval(loadTokens, 30000);  // Refresh every 30 seconds
+        setInterval(loadTokens, 300000);  // Refresh every 5 minutes
     </script>
 
     <style>
@@ -227,6 +369,29 @@
     @keyframes spin {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
+    }
+    
+    .token-logo {
+        width: 48px;
+        height: 48px;
+        margin-right: 16px;
+        border-radius: 50%;
+        overflow: hidden;
+    }
+    
+    .token-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    
+    .token-card {
+        display: flex;
+        align-items: center;
+        padding: 16px;
+        margin: 8px 0;
+        border: 1px solid #ddd;
+        border-radius: 8px;
     }
 </style>
 </body>

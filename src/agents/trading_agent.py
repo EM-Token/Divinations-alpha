@@ -11,6 +11,7 @@ import aiohttp
 import logging
 import base58
 from utils.rpc import make_rpc_call
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ class TradingAgent:
     def __init__(self, config: Dict):
         if not config.get("rpc_url"):
             raise ValueError("RPC URL is required")
+        if not config.get("birdeye_api_key"):
+            raise ValueError("Birdeye API key is required")
         
         self.transaction_analyzer = TransactionAnalyzer()
         self.chart_analyzer = ChartAnalyzer()
@@ -29,12 +32,8 @@ class TradingAgent:
         self.active_tokens: Dict[str, Token] = {}
         self.risk_threshold = config.get("risk_threshold", 70)
         self.min_confidence = config.get("min_confidence", 0.6)
-        # Format RPC URL
-        rpc_url = str(config["rpc_url"]).strip()
-        if not rpc_url.startswith('http'):
-            rpc_url = f"https://{rpc_url}"
-        logger.info(f"Using RPC URL: {rpc_url}")
-        self.rpc_url = rpc_url
+        self.rpc_url = config["rpc_url"]
+        self.birdeye_api_key = config["birdeye_api_key"]
         self.last_fetch_time = None
         
     async def process_new_token(self, token_data: Dict):
@@ -50,14 +49,41 @@ class TradingAgent:
         
     async def analyze_token(self, token: Token):
         """Run comprehensive analysis on a token"""
+        # Notify clients that analysis is starting
+        await websocket_manager.broadcast_token_update({
+            "address": token.address,
+            "name": token.name,
+            "status": TokenStatus.ANALYZING.value,
+            "message": "Analyzing token..."
+        })
+        
         token.status = TokenStatus.ANALYZING
         
+        # Get transaction and price data
+        transactions = await self._get_transactions(token)
+        price_history = await self._get_price_history(token)
+        
         # Run all analyses in parallel
-        transaction_analysis, chart_analysis, sentiment_analysis = await asyncio.gather(
-            self.transaction_analyzer.analyze_transactions(token, await self._get_transactions(token)),
-            self.chart_analyzer.analyze_chart(await self._get_price_history(token)),
-            self.sentiment_analyzer.analyze_sentiment(token.symbol, token.name)
-        )
+        try:
+            # Run analyses separately to handle empty data
+            transaction_analysis = await self.transaction_analyzer.analyze_transactions(token, transactions) if transactions else {
+                "sniper_count": 0,
+                "bot_count": 0,
+                "insider_count": 0
+            }
+            
+            chart_analysis = await self.chart_analyzer.analyze_chart(price_history) if price_history else {
+                "natural_chart": True,
+                "patterns": []
+            }
+            
+            # Don't automatically analyze sentiment
+            sentiment_analysis = {"overall_sentiment": 0.0}
+        except Exception as e:
+            logger.error(f"Error during analysis: {e}")
+            transaction_analysis = {"sniper_count": 0, "bot_count": 0, "insider_count": 0}
+            chart_analysis = {"natural_chart": True, "patterns": []}
+            sentiment_analysis = {"overall_sentiment": 0.0}
         
         # Update token metrics
         token.metrics.sniper_count = transaction_analysis["sniper_count"]
@@ -84,14 +110,19 @@ class TradingAgent:
             "risk_score": token.risk_score,
             "trading_signal": token.trading_signal.value,
             "status": token.status.value,
-            "metrics": token.metrics.__dict__
+            "metrics": token.metrics.__dict__,
+            "logo_url": token.logo_url if hasattr(token, 'logo_url') else None
         })
         
         # Notify about detected patterns
-        for pattern in patterns:
+        for pattern in chart_analysis.get("patterns", []):
             await websocket_manager.broadcast_pattern_alert({
                 "token_address": token.address,
-                "pattern": pattern.__dict__
+                "pattern": {
+                    "type": pattern,
+                    "confidence": 1.0,  # Default confidence
+                    "description": f"Detected {pattern} pattern"
+                }
             })
         
     def _calculate_risk_score(self, 
@@ -135,137 +166,140 @@ class TradingAgent:
         
     async def _get_transactions(self, token: Token) -> List[Dict]:
         """Fetch token transactions from blockchain"""
-        # Implementation depends on blockchain API
-        pass
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://public-api.birdeye.so/defi/v2/token/txs",
+                    params={
+                        "address": token.address,
+                        "chain": "solana",
+                        "type": "swap",
+                        "offset": 0,
+                        "limit": 100
+                    },
+                    headers={
+                        "X-API-KEY": self.birdeye_api_key,
+                        "accept": "*/*"
+                    }
+                ) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to fetch transactions: {await response.text()}")
+                        return []
+                        
+                    data = await response.json()
+                    if not data.get("success"):
+                        logger.debug(f"No transaction data available yet for {token.address}")
+                        return []
+                    
+                    transactions = data.get("data", {}).get("items", [])
+                    logger.info(f"Found {len(transactions)} transactions for {token.address}")
+                    return transactions
+        except Exception as e:
+            logger.error(f"Error fetching transactions: {e}")
+            return []
         
     async def _get_price_history(self, token: Token) -> List[Dict]:
         """Fetch token price history"""
-        # Implementation depends on price data source
-        pass 
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://public-api.birdeye.so/defi/v2/price/history",
+                    params={
+                        "token": token.address,
+                        "chain": "solana",
+                        "interval": "1H",
+                        "limit": 24
+                    },
+                    headers={
+                        "X-API-KEY": self.birdeye_api_key,
+                        "accept": "application/json"
+                    }
+                ) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to fetch price history: {await response.text()}")
+                        return []
+                        
+                    data = await response.json()
+                    return data.get("data", {}).get("items", [])
+        except Exception as e:
+            logger.error(f"Error fetching price history: {e}")
+            return []
         
     async def fetch_live_tokens(self):
-        """Fetch recent token transactions from Solana"""
-        logger.info("Fetching live tokens from Solana...")
+        """Fetch trending tokens from Birdeye"""
+        logger.info("Fetching trending tokens from Birdeye...")
         
-        if not self.rpc_url:
-            logger.error("No RPC URL configured")
+        if not self.birdeye_api_key:
+            logger.error("No Birdeye API key configured")
             return
         
         try:
-            logger.info(f"Making RPC call to {self.rpc_url}")
-            # Get recent signatures first
-            response = await make_rpc_call(
-                self.rpc_url,
-                "getSignaturesForAddress",
-                [
-                    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-                    {
-                        "limit": 10,
-                        "commitment": "confirmed"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://public-api.birdeye.so/defi/token_trending",
+                    params={
+                        "chain": "solana",
+                        "page": 1,
+                        "perPage": 20,
+                        "sortBy": "v24hUSD",
+                        "sortOrder": "desc",
+                        "timeframe": "1H"
+                    },
+                    headers={
+                        "X-API-KEY": self.birdeye_api_key,
+                        "accept": "*/*"
                     }
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Birdeye API error: {error_text}")
+                        logger.error(f"Status code: {response.status}")
+                        logger.error(f"Headers used: {response.request_info.headers}")
+                        return
+                        
+                    data = await response.json()
+            
+            if data.get("success") and isinstance(data.get("data", {}).get("tokens"), list):
+                tokens = data["data"]["tokens"]
+                tokens_with_logos = [
+                    token for token in tokens 
+                    if token.get("logoURI")
                 ]
-            )
-
-            if not response:
-                logger.error("No response received from RPC call")
-                return
-
-            logger.debug(f"Raw RPC response: {response}")
-            
-            if not isinstance(response, dict):
-                logger.error(f"Unexpected response type: {type(response)}")
-                return
                 
-            data = response
-            logger.info(f"Received response from Solana: {data}")
-            
-            if "result" in data and isinstance(data["result"], list):
-                logger.info(f"Found {len(data['result'])} transactions")
-                for sig_info in data['result']:
+                for token in tokens_with_logos:
                     try:
-                        if not sig_info or not isinstance(sig_info, dict):
-                            logger.warning("Invalid signature info format")
-                            continue
-                            
-                        signature = sig_info.get('signature')
-                        if not signature:
-                            logger.warning("Missing signature in transaction info")
-                            continue
-                            
-                        # Get transaction details
-                        tx_response = await make_rpc_call(
-                            self.rpc_url,
-                            "getTransaction",
-                            [
-                                signature,
-                                {
-                                    "encoding": "jsonParsed",
-                                    "maxSupportedTransactionVersion": 0
-                                }
-                            ]
-                        )
-                        
-                        if not tx_response:
-                            logger.warning(f"No response for transaction {signature}")
-                            continue
-                            
-                        if not isinstance(tx_response, dict):
-                            logger.warning(f"Invalid response type for transaction {signature}")
-                            continue
-                            
-                        tx_result = tx_response.get("result")
-                        if not tx_result or not isinstance(tx_result, dict):
-                            logger.warning(f"No result data for transaction {signature}")
-                            continue
-                        
-                        tx_meta = tx_result.get('meta')
-                        if not tx_meta or not isinstance(tx_meta, dict):
-                            logger.warning(f"No meta data for transaction {signature}")
-                            continue
-                            
-                        post_balances = tx_meta.get('postTokenBalances')
-                        if not post_balances or not isinstance(post_balances, list):
-                            logger.debug(f"No token balances in transaction {signature}")
-                            continue
-                            
-                        # Extract token data from transaction
-                        token_address = None
-                        creator_address = None
-                        
-                        # Find the new token mint
-                        for balance in post_balances:
-                            if isinstance(balance, dict) and balance.get('mint'):
-                                token_address = balance['mint']
-                                break
-                                
-                        # Get creator from the first account
-                        message = tx_result.get('transaction', {}).get('message', {})
-                        if isinstance(message, dict) and message.get('accountKeys'):
-                            account_keys = message['accountKeys']
-                            if isinstance(account_keys, list) and len(account_keys) > 0:
-                                creator_address = account_keys[0]
-                            
-                        if not token_address or not creator_address:
-                            logger.debug(f"Missing token or creator address in transaction {signature}")
+                        token_address = token.get("address")
+                        if not token_address:
                             continue
                             
                         token_data = {
                             "address": token_address,
-                            "name": f"Token {token_address[:8] if token_address else 'Unknown'}",
-                            "creator_address": creator_address,
-                            "symbol": "",
-                            "description": ""
+                            "name": token.get("name", f"Token {token_address[:8]}"),
+                            "creator_address": "Unknown",
+                            "symbol": token.get("symbol") or "",
+                            "description": f"24h Volume: ${token.get('volume24hUSD', 0):,.2f} | Price: ${token.get('price', 0):,.6f}",
+                            "logoURI": token.get("logoURI"),
+                            "volume24hUSD": token.get("volume24hUSD", 0),
+                            "price": token.get("price", 0),
+                            "liquidity": token.get("liquidity", 0),
+                            "status": TokenStatus.NEW.value,
+                            "patterns": ["example_pattern"],
+                            "risk_score": 0,
+                            "trading_signal": TradingSignal.WAIT.value
                         }
                         
-                        if not all(token_data.values()):
-                            logger.warning(f"Skipping token with incomplete data: {token_data}")
+                        # Only require address to be present
+                        if not token_data["address"]:
+                            logger.warning("Skipping token with no address")
                             continue
-                            
+                        
+                        # Log token data for debugging
+                        logger.debug(f"Raw token data: {token}")
                         logger.info(f"Processing token: {token_data}")
                         await self.process_new_token(token_data)
                     except Exception as e:
-                        logger.error(f"Error processing transaction {sig_info.get('signature', 'unknown')}: {e}", exc_info=True)
+                        logger.error(f"Error processing token {token.get('address', 'unknown')}: {e}", exc_info=True)
             else:
-                logger.error(f"No results in response: {data}")
+                logger.error(f"Invalid response from Birdeye: {data}")
         except Exception as e:
             logger.error(f"Error fetching live tokens: {e}", exc_info=True) 

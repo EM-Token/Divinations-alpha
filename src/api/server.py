@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 import asyncio
 import json
@@ -37,7 +37,7 @@ async def fetch_tokens_periodically():
             await trading_agent.fetch_live_tokens()
         except Exception as e:
             logger.error(f"Error fetching tokens: {e}", exc_info=True)
-        await asyncio.sleep(60)  # Fetch every minute
+        await asyncio.sleep(300)  # Fetch every 5 minutes
 
 @app.on_event("startup")
 async def startup_event():
@@ -49,6 +49,7 @@ trading_agent = TradingAgent({
     "rpc_url": rpc_url,
     "twitter_api_key": os.getenv("TWITTER_API_KEY"),
     "twitter_api_secret": os.getenv("TWITTER_API_SECRET"),
+    "birdeye_api_key": os.getenv("BIRDEYE_API_KEY"),
     "risk_threshold": 70,
     "min_confidence": 0.6
 })
@@ -77,45 +78,41 @@ class TokenAnalysis(BaseModel):
     patterns: List[str]
     last_updated: datetime
 
+class TokenResponse(BaseModel):
+    address: str
+    name: str
+    symbol: str
+    logoURI: Optional[str]
+    volume24hUSD: float
+    price: float
+    liquidity: float
+    status: str
+    patterns: List[str]
+    risk_score: float
+    trading_signal: str
+
 @app.get("/")
 async def root():
     return FileResponse("src/static/index.html")
 
-@app.get("/tokens")
-async def get_tokens() -> List[TokenAnalysis]:
+@app.get("/tokens", response_model=List[TokenResponse])
+async def get_tokens():
     """Get all tracked tokens and their analysis"""
-    # Add a test token if none exist
-    if not trading_agent.active_tokens:
-        test_token = Token(
-            address="test_token_address",
-            name="Test Token",
-            creator_address="test_creator"
-        )
-        # Initialize metrics
-        test_token.metrics = TokenMetrics(
-            sniper_count=2,
-            bot_buyer_count=1,
-            insider_count=0,
-            natural_chart=True,
-            social_sentiment=0.5
-        )
-        test_token.risk_score = 65.5
-        test_token.trading_signal = TradingSignal.WAIT
-        test_token.status = TokenStatus.APPROVED
-        trading_agent.active_tokens[test_token.address] = test_token
-
     tokens = []
     for token in trading_agent.active_tokens.values():
-        tokens.append(TokenAnalysis(
-            address=token.address,
-            name=token.name,
-            risk_score=token.risk_score,
-            trading_signal=token.trading_signal.value,
-            status=token.status.value,
-            metrics=token.metrics.__dict__,
-            patterns=["example_pattern"],  # Simplified for testing
-            last_updated=datetime.now()
-        ))
+        tokens.append({
+            "address": token.address,
+            "name": token.name,
+            "symbol": token.symbol,
+            "logoURI": token.logoURI,
+            "volume24hUSD": token.volume24hUSD,
+            "price": token.price,
+            "liquidity": token.liquidity,
+            "status": token.status.value,
+            "patterns": ["example_pattern"],
+            "risk_score": token.risk_score,
+            "trading_signal": token.trading_signal.value
+        })
     return tokens
 
 @app.get("/tokens/{address}")
@@ -138,6 +135,19 @@ async def get_token(address: str) -> TokenAnalysis:
         ),
         last_updated=datetime.now()
     )
+
+@app.get("/api/twitter-sentiment")
+async def get_twitter_sentiment(symbol: str, name: str):
+    """Get Twitter sentiment analysis for a token"""
+    try:
+        sentiment_data = await trading_agent.sentiment_analyzer.analyze_sentiment(symbol, name)
+        return {
+            "sentiment_score": sentiment_data.get("overall_sentiment", 0),
+            "tweets": sentiment_data.get("tweets", [])
+        }
+    except Exception as e:
+        logger.error(f"Error getting Twitter sentiment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/tokens/analyze")
 async def analyze_token(address: str):

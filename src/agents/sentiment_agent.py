@@ -5,6 +5,12 @@ from datetime import datetime, timedelta
 from textblob import TextBlob
 from utils.twitter_client import TwitterClient
 from dataclasses import dataclass
+import logging
+import base64
+import json
+import time
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class SentimentResult:
@@ -15,53 +21,129 @@ class SentimentResult:
     text: str
 
 class SentimentAnalyzer:
-    def __init__(self, twitter_api_key: str, twitter_api_secret: str):
-        self.twitter_client = TwitterClient(twitter_api_key, twitter_api_secret)
-        self.sentiment_cache = {}
-        self.cache_duration = timedelta(minutes=5)
+    def __init__(self, api_key: str, api_secret: str):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.bearer_token = None
+        self.sentiment_cache = {}  # Cache for sentiment results
+        self.cache_duration = 300  # 5 minutes in seconds
+        self.last_twitter_call = 0  # Track last Twitter API call
+        self.twitter_rate_limit = 300  # 5 minutes in seconds
         
-    async def analyze_sentiment(self, token_symbol: str, token_name: str) -> Dict:
-        """Analyze overall sentiment from multiple sources"""
-        search_terms = [token_symbol, token_name]
+    async def _get_bearer_token(self) -> str:
+        """Get OAuth 2.0 Bearer Token from Twitter"""
+        if self.bearer_token:
+            return self.bearer_token
+            
+        try:
+            # Encode credentials
+            credentials = base64.b64encode(
+                f"{self.api_key}:{self.api_secret}".encode()
+            ).decode()
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.twitter.com/oauth2/token",
+                    headers={
+                        "Authorization": f"Basic {credentials}",
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    data={"grant_type": "client_credentials"},
+                    ssl=True
+                ) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to get bearer token: {await response.text()}")
+                        return None
+                        
+                    data = await response.json()
+                    self.bearer_token = data.get("access_token")
+                    return self.bearer_token
+                    
+        except Exception as e:
+            logger.error(f"Error getting bearer token: {e}")
+            return None
         
-        # Gather sentiment from different sources
-        results = await asyncio.gather(
-            self._analyze_twitter(search_terms),
-            self._analyze_news(search_terms),
-            self._analyze_telegram(search_terms)
-        )
-        
-        # Combine results with weighted average
-        twitter_sentiment, news_sentiment, telegram_sentiment = results
-        
-        weights = {
-            "twitter": 0.5,
-            "news": 0.3,
-            "telegram": 0.2
-        }
-        
-        combined_score = (
-            twitter_sentiment["score"] * weights["twitter"] +
-            news_sentiment["score"] * weights["news"] +
-            telegram_sentiment["score"] * weights["telegram"]
-        )
-        
-        # Calculate confidence based on number of sources and their individual confidences
-        confidence = (
-            twitter_sentiment["confidence"] * weights["twitter"] +
-            news_sentiment["confidence"] * weights["news"] +
-            telegram_sentiment["confidence"] * weights["telegram"]
-        )
-        
-        return {
-            "overall_sentiment": combined_score,
-            "confidence": confidence,
-            "sources": {
-                "twitter": twitter_sentiment,
-                "news": news_sentiment,
-                "telegram": telegram_sentiment
-            }
-        }
+    async def analyze_sentiment(self, symbol: str, name: str) -> Optional[Dict]:
+        """Analyze social sentiment for a token"""
+        try:
+            # Check cache first
+            cache_key = f"{symbol}:{name}"
+            current_time = time.time()
+            
+            if cache_key in self.sentiment_cache:
+                cached_result, timestamp = self.sentiment_cache[cache_key]
+                if current_time - timestamp < self.cache_duration:
+                    logger.debug(f"Using cached sentiment for {cache_key}")
+                    return cached_result
+            
+            # Check Twitter rate limit
+            if current_time - self.last_twitter_call < self.twitter_rate_limit:
+                logger.warning("Twitter rate limit in effect, returning neutral sentiment")
+                return {"overall_sentiment": 0.0, "tweets": []}
+            
+            # Get bearer token first
+            bearer_token = await self._get_bearer_token()
+            if not bearer_token:
+                logger.warning("Twitter authentication failed, returning neutral sentiment")
+                return {"overall_sentiment": 0.0, "tweets": []}
+            
+            # Search Twitter for mentions
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.twitter.com/2/tweets/search/recent",
+                    params={
+                        "query": f"({symbol} OR {name}) -is:retweet",
+                        "max_results": 100
+                    },
+                    headers={
+                        "Authorization": f"Bearer {bearer_token}"
+                    }
+                ) as response:
+                    # Update last Twitter API call time
+                    self.last_twitter_call = current_time
+                    
+                    if response.status != 200:
+                        logger.error(f"Twitter API error: {await response.text()}")
+                        if response.status == 429:  # Rate limit error
+                            logger.warning("Twitter rate limit exceeded, using cached or neutral sentiment")
+                            return self.sentiment_cache.get(cache_key, ({"overall_sentiment": 0.0, "tweets": []}, 0))[0]
+                        return {"overall_sentiment": 0.0, "tweets": []}
+                    
+                    data = await response.json()
+                    
+                    if "data" not in data:
+                        logger.warning(f"No tweets found for {symbol}")
+                        return {"overall_sentiment": 0.0, "tweets": []}
+                    
+                    # Process tweets and calculate sentiment
+                    tweets = []
+                    total_sentiment = 0
+                    
+                    for tweet in data["data"]:
+                        blob = TextBlob(tweet["text"])
+                        sentiment = blob.sentiment.polarity
+                        total_sentiment += sentiment
+                        
+                        tweets.append({
+                            "text": tweet["text"],
+                            "created_at": tweet.get("created_at", ""),
+                            "sentiment": sentiment
+                        })
+                    
+                    overall_sentiment = total_sentiment / len(tweets) if tweets else 0
+                    
+                    result = {
+                        "overall_sentiment": overall_sentiment,
+                        "tweets": tweets
+                    }
+                    
+                    # Cache the result
+                    self.sentiment_cache[cache_key] = (result, current_time)
+                    return result
+            
+        except Exception as e:
+            logger.error(f"Error analyzing Twitter sentiment: {e}")
+            return None
         
     async def _analyze_twitter(self, search_terms: List[str]) -> Dict:
         """Analyze Twitter sentiment"""
